@@ -4,6 +4,7 @@
 #include <complex>
 #include <QProcess>
 #include <QMessageBox>
+#include <QResizeEvent>
 
 
 // 간단 Cooley–Tuk FFT (in.size() == power of two)
@@ -42,6 +43,8 @@ MainWindow::MainWindow(QWidget *parent)
     if (!openWav("/mnt/nfs/test_contents/test.wav")) {
         qFatal("WAV open failed");
     }
+    m_button = new QPushButton("Sync", this);
+    connect(m_button, &QPushButton::clicked, m_button, &QPushButton::hide);
 
     // 1) aplay 프로세스 준비 (stdin으로 PCM 받아 재생)
     m_playProc = new QProcess(this);
@@ -66,10 +69,14 @@ MainWindow::MainWindow(QWidget *parent)
         return;
     }
 
-    // 2) 타이머 간격 계산: (1024 샘플 / fs) * 1000 ms
-    m_intervalMs = int( double(m_fftSize) / m_sampleRate * 1000.0 );
+    // ——— 10FPS용 계산 ———
+    // 1/10초마다 읽을 샘플 수
+    m_samplesPerFrame = int(double(m_sampleRate) / 10.0);
+    // 링버퍼 초기화
+    m_fftBuffer.reserve(m_fftSize);
+
     connect(m_timer, &QTimer::timeout, this, &MainWindow::onTimer);
-    m_timer->start(m_intervalMs);
+    m_timer->start(100);
 }
 
 MainWindow::~MainWindow()
@@ -88,6 +95,19 @@ bool MainWindow::openWav(const QString &path)
     if (!m_file.open(QIODevice::ReadOnly)) return false;
     readHeader();
     return true;
+}
+
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    int w = width(), h = height();
+    int topH = h / 4;
+    int cellW = w / 4;
+
+
+    m_button->setGeometry(cellW * 3, 0, cellW, topH);
+
+    QMainWindow::resizeEvent(event);
 }
 
 void MainWindow::readHeader()
@@ -122,34 +142,45 @@ void MainWindow::readHeader()
 void MainWindow::onTimer()
 {
     const int bytesPerSample = m_bitsPerSample/8;
-    const int chunkBytes    = m_fftSize * bytesPerSample * m_channels;
+    const int chunkBytes    = m_samplesPerFrame * bytesPerSample * m_channels;
     QByteArray buf = m_file.read(chunkBytes);
 
     if (buf.size() < chunkBytes) {
         // 파일 끝: 더 이상 처리하지 않고 종료
         m_timer->stop();
-        m_playProc->closeWriteChannel();
-    m_file.close();
+        if (m_playProc) {
+            m_playProc->closeWriteChannel();
+            m_playProc->waitForFinished();
+        }
+        m_file.close();
         return;
     }
 
     // 1) aplay 프로세스에 똑같은 버퍼 쓰기 → 정확히 이 타이밍의 오디오 출력
     m_playProc->write(buf);
 
-    // 2) FFT 용 모노 변환
-    QVector<std::complex<double>> window(m_fftSize);
-    for (int i = 0; i < m_fftSize; ++i) {
-        const char *p = buf.constData() + (i*m_channels)*bytesPerSample;
+    // (2) 읽은 샘플을 FFT 링 버퍼에 추가 (모노 변환)
+    for (int i = 0; i < m_samplesPerFrame; ++i) {
+        int offset = i * m_channels * bytesPerSample;
+        // 16bit PCM 가정
+        const char *p = buf.constData() + offset;
         qint16 sample = *reinterpret_cast<const qint16*>(p);
-        window[i] = std::complex<double>(sample / 32768.0, 0);
+        double norm = double(sample) / 32768.0;
+        // push back, 버퍼가 너무 크면 앞에서 pop
+        m_fftBuffer.push_back({norm, 0.0});
+        if (m_fftBuffer.size() > quint32(m_fftSize))
+            m_fftBuffer.pop_front();
     }
 
-    // 3) FFT & 시각화
-    auto spectrum = fft(window);
-    int half = spectrum.size()/2;
-    for (int i = 0; i < half; ++i)
-        m_levels[i] = std::abs(spectrum[i]) / half;
-    update();
+    // (3) 충분히 쌓였으면 FFT 수행
+    if (m_fftBuffer.size() == quint32(m_fftSize)) {
+        auto spectrum = fft(m_fftBuffer);
+        int half = spectrum.size() / 2;
+        for (int i = 0; i < half; ++i) {
+            m_levels[i] = std::abs(spectrum[i]) / half;
+        }
+        update();  // paintEvent 트리거
+    }
 }
 
 void MainWindow::paintEvent(QPaintEvent *)
@@ -157,16 +188,52 @@ void MainWindow::paintEvent(QPaintEvent *)
     QPainter p(this);
     p.fillRect(rect(), Qt::black);
 
-    int w = width();
-    int h = height();
+    int w = width(), h = height();
+    int topH = h / 4;
+    int botY = topH;
+    int botH = h - topH;
+    int cellW = w / 4;
+
+    // ─────── 경계선 그리기 ───────
+    p.setPen(Qt::white);
+    // 상단/하단 경계 수평선
+    p.drawLine(0, topH, w, topH);
+    // 상단 영역 세로 분할선 (B/C, C/D, D/E)
+    for (int i = 1; i < 4; ++i) {
+        p.drawLine(cellW * i, 0, cellW * i, topH);
+    }
+    // ────────────────────────────
+
+    QFont font = p.font();
+    font.setPointSize(14);
+    p.setFont(font);
+
+    struct { int x; const char* txt; } labels[] = {
+        { 0*cellW, "volume[implementing]" },
+        { 1*cellW, "distance: ???m" },
+        { 2*cellW, "music name: test_wav" }
+    };
+    for (auto &L : labels) {
+        QRect area(L.x, 0, cellW, topH);
+        p.drawText(area, Qt::AlignCenter, L.txt);
+    }
+
+    // ——— 하단 영역 이퀄라이저 그리기 ———
     int barCount = m_levels.size();
     double barW = double(w) / barCount;
 
     p.setPen(Qt::NoPen);
     for (int i = 0; i < barCount; ++i) {
-        double level = qMin(m_levels[i]*50.0, 1.0);  // 스케일 조정
-        QRectF bar(i*barW, h*(1.0 - level), barW*0.8, h*level);
-        p.setBrush(QColor::fromHsv((i*360/barCount), 255, 200));
+        double level = qMin(m_levels[i] * 50.0, 1.0);
+        // 높이 계산
+        double barH = botH * level;
+        QRectF bar(
+            i * barW,
+            botY + (botH - barH),
+            barW * 0.8,
+            barH
+        );
+        p.setBrush(QColor::fromHsv((i * 360 / barCount), 255, 200));
         p.drawRect(bar);
     }
 }

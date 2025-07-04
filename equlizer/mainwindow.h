@@ -7,6 +7,7 @@
 #include <QFile>
 #include <complex>
 #include <QProcess>
+#include <QPushButton>
 
 class MainWindow : public QMainWindow
 {
@@ -17,6 +18,7 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private slots:
     void onTimer();
@@ -33,6 +35,9 @@ private:
     quint16 m_channels;
     quint32 m_sampleRate;
     quint16 m_bitsPerSample;
+    QVector<std::complex<double>> m_fftBuffer;
+    int       m_samplesPerFrame;
+    QPushButton *m_button;
 
     QVector<double> m_levels;    // 이퀄라이저 바 높이
     int m_fftSize;               // FFT 윈도우 크기
