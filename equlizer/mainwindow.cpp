@@ -5,11 +5,7 @@
 #include <QProcess>
 #include <QMessageBox>
 #include <QResizeEvent>
-#include <fcntl.h>
-#include <termios.h>
-#include <unistd.h>
-#include <algorithm>
-#include <QDebug> // 디버깅용 로그 출력을 위해 추가
+
 
 // 간단 Cooley–Tuk FFT (in.size() == power of two)
 QVector<std::complex<double>> MainWindow::fft(const QVector<std::complex<double>> &in)
@@ -40,13 +36,7 @@ MainWindow::MainWindow(QWidget *parent)
       m_playProc(nullptr),
       m_dataPos(0),
       m_dataSize(0),
-      m_fftSize(1024),
-      m_serialFd(-1),
-      m_distanceTimer(new QTimer(this)),
-      m_currentDistance(0),
-      m_currentVolume(0),
-      m_mixerHandle(nullptr), // ALSA 핸들 초기화
-      m_mixerElem(nullptr)    // ALSA 요소 초기화
+      m_fftSize(1024)
 {
     setMinimumSize(600, 300);
     m_levels.resize( m_fftSize/2 );
@@ -56,10 +46,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_button = new QPushButton("Sync", this);
     connect(m_button, &QPushButton::clicked, m_button, &QPushButton::hide);
 
-    // 1) 볼륨 컨트롤 초기화 (ALSA 사용)
-    initVolumeControl();
-
-    // 2) aplay 프로세스 준비
+    // 1) aplay 프로세스 준비 (stdin으로 PCM 받아 재생)
     m_playProc = new QProcess(this);
 
     QString amixerProg = "./amixer";
@@ -90,22 +77,10 @@ MainWindow::MainWindow(QWidget *parent)
 
     connect(m_timer, &QTimer::timeout, this, &MainWindow::onTimer);
     m_timer->start(100);
-
-    // US100 초기화
-    if (!initializeUS100()) {
-        QMessageBox::warning(this, "Error", "Failed to initialize US100 sensor");
-    } else {
-        // 거리 측정 타이머 설정 (100ms 간격)
-        connect(m_distanceTimer, &QTimer::timeout, this, &MainWindow::onDistanceTimer);
-        m_distanceTimer->start(100);
-    }
 }
 
 MainWindow::~MainWindow()
 {
-    // ALSA 리소스 정리
-    cleanupVolumeControl();
-
     m_timer->stop();
     if (m_playProc) {
         m_playProc->closeWriteChannel();
@@ -113,70 +88,7 @@ MainWindow::~MainWindow()
         m_playProc->waitForFinished();
     }
     m_file.close();
-
-    if (m_serialFd >= 0) {
-        ::close(m_serialFd);
-    }
-    delete m_distanceTimer;
 }
-
-// ALSA 믹서 초기화 함수
-void MainWindow::initVolumeControl()
-{
-    const char* card = "default";
-    const char* selem_name = "Master"; // 대부분 "Master" 또는 "PCM" 입니다. 'amixer scontrols'로 확인하세요.
-
-    if (snd_mixer_open(&m_mixerHandle, 0) < 0) {
-        qWarning("ALSA: snd_mixer_open failed");
-        return;
-    }
-    if (snd_mixer_attach(m_mixerHandle, card) < 0) {
-        qWarning("ALSA: snd_mixer_attach failed");
-        snd_mixer_close(m_mixerHandle); m_mixerHandle = nullptr;
-        return;
-    }
-    if (snd_mixer_selem_register(m_mixerHandle, NULL, NULL) < 0) {
-        qWarning("ALSA: snd_mixer_selem_register failed");
-        snd_mixer_close(m_mixerHandle); m_mixerHandle = nullptr;
-        return;
-    }
-    if (snd_mixer_load(m_mixerHandle) < 0) {
-        qWarning("ALSA: snd_mixer_load failed");
-        snd_mixer_close(m_mixerHandle); m_mixerHandle = nullptr;
-        return;
-    }
-
-    snd_mixer_selem_id_t *sid;
-    snd_mixer_selem_id_alloca(&sid);
-    snd_mixer_selem_id_set_index(sid, 0);
-    snd_mixer_selem_id_set_name(sid, selem_name);
-    m_mixerElem = snd_mixer_find_selem(m_mixerHandle, sid);
-
-    if (!m_mixerElem) {
-        qWarning() << "ALSA: Mixer element not found:" << selem_name;
-        snd_mixer_close(m_mixerHandle);
-        m_mixerHandle = nullptr;
-        return;
-    }
-
-    // 재생 볼륨의 물리적 범위 가져오기
-    snd_mixer_selem_get_playback_volume_range(m_mixerElem, &m_volMin, &m_volMax);
-
-    // 초기 볼륨을 80%로 설정
-    long initial_vol = (m_volMax - m_volMin) * 80 / 100 + m_volMin;
-    snd_mixer_selem_set_playback_volume_all(m_mixerElem, initial_vol);
-    m_currentVolume = 80;
-}
-
-// ALSA 리소스 정리 함수
-void MainWindow::cleanupVolumeControl()
-{
-    if (m_mixerHandle) {
-        snd_mixer_close(m_mixerHandle);
-        m_mixerHandle = nullptr;
-    }
-}
-
 bool MainWindow::openWav(const QString &path)
 {
     m_file.setFileName(path);
@@ -190,10 +102,10 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 {
     int w = width(), h = height();
     int topH = h / 4;
-    int cellW = w / 3;
+    int cellW = w / 4;
 
 
-    m_button->setGeometry(cellW * 2, 0, cellW, topH);
+    m_button->setGeometry(cellW * 3, 0, cellW, topH);
 
     QMainWindow::resizeEvent(event);
 }
@@ -280,14 +192,14 @@ void MainWindow::paintEvent(QPaintEvent *)
     int topH = h / 4;
     int botY = topH;
     int botH = h - topH;
-    int cellW = w / 3;
+    int cellW = w / 4;
 
     // ─────── 경계선 그리기 ───────
     p.setPen(Qt::white);
     // 상단/하단 경계 수평선
     p.drawLine(0, topH, w, topH);
     // 상단 영역 세로 분할선 (B/C, C/D, D/E)
-    for (int i = 1; i < 3; ++i) {
+    for (int i = 1; i < 4; ++i) {
         p.drawLine(cellW * i, 0, cellW * i, topH);
     }
     // ────────────────────────────
@@ -295,12 +207,11 @@ void MainWindow::paintEvent(QPaintEvent *)
     QFont font = p.font();
     font.setPointSize(14);
     p.setFont(font);
-    QString volumeText = QString("volume: %1%").arg(m_currentVolume);
-    QString distanceText = QString("distance: %1mm").arg(m_currentDistance);
 
-    struct { int x; QString txt; } labels[] = {
-        { 0*cellW, volumeText },
-        { 1*cellW, distanceText }
+    struct { int x; const char* txt; } labels[] = {
+        { 0*cellW, "volume[implementing]" },
+        { 1*cellW, "distance: ???m" },
+        { 2*cellW, "music name: test_wav" }
     };
     for (auto &L : labels) {
         QRect area(L.x, 0, cellW, topH);
@@ -325,101 +236,4 @@ void MainWindow::paintEvent(QPaintEvent *)
         p.setBrush(QColor::fromHsv((i * 360 / barCount), 255, 200));
         p.drawRect(bar);
     }
-}
-
-bool MainWindow::initializeUS100()
-{
-    const char *SERIAL_DEV = "/dev/ttyUSB0";
-    m_serialFd = ::open(SERIAL_DEV, O_RDWR | O_NOCTTY | O_SYNC);
-    if (m_serialFd < 0) {
-        return false;
-    }
-
-    termios tty = {};
-    if (tcgetattr(m_serialFd, &tty) != 0) {
-        ::close(m_serialFd);
-        m_serialFd = -1;
-        return false;
-    }
-
-    cfsetospeed(&tty, B9600);
-    cfsetispeed(&tty, B9600);
-
-    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;
-    tty.c_cflag &= ~PARENB;
-    tty.c_cflag &= ~CSTOPB;
-    tty.c_cflag |= CLOCAL | CREAD;
-    tty.c_iflag = 0;
-    tty.c_oflag = 0;
-    tty.c_lflag = 0;
-    tty.c_iflag &= ~(IXON | IXOFF | IXANY);
-    tty.c_cflag &= ~CRTSCTS;
-
-    tcflush(m_serialFd, TCIOFLUSH);
-    if (tcsetattr(m_serialFd, TCSANOW, &tty) != 0) {
-        ::close(m_serialFd);
-        m_serialFd = -1;
-        return false;
-    }
-
-    return true;
-}
-
-int MainWindow::readUS100Distance()
-{
-    if (m_serialFd < 0) return -1;
-
-    uint8_t cmd = 0x55;
-    if (::write(m_serialFd, &cmd, 1) != 1) return -1;
-
-    uint8_t buf[2];
-    int got = 0;
-    int wait = 0;
-    constexpr int TIMEOUT_MS = 100;
-
-    while (got < 2 && wait < TIMEOUT_MS) {
-        int n = ::read(m_serialFd, buf + got, 2 - got);
-        if (n > 0) {
-            got += n;
-        } else {
-            usleep(1000);  // 1ms delay
-            wait++;
-        }
-    }
-
-    if (got != 2) return -1;
-    return (buf[0] << 8) | buf[1];
-}
-
-void MainWindow::updateVolume(int distance)
-{
-    // ALSA 핸들이 유효하지 않으면 아무것도 하지 않음
-    if (!m_mixerElem) return;
-
-    // 거리가 범위를 벗어나면 조정
-    if (distance < DIST_MIN_MM) distance = DIST_MIN_MM;
-    if (distance > DIST_MAX_MM) distance = DIST_MAX_MM;
-
-    // 거리를 볼륨 퍼센트로 변환 (선형)
-    long volume_pct = VOL_MIN_PCT + (long)(VOL_MAX_PCT - VOL_MIN_PCT) * (distance - DIST_MIN_MM) / (DIST_MAX_MM - DIST_MIN_MM);
-
-    // 퍼센트를 실제 ALSA 볼륨 값으로 변환
-    long alsa_vol = (m_volMax - m_volMin) * volume_pct / 100 + m_volMin;
-
-    // ALSA API를 통해 모든 채널(좌/우)의 볼륨을 설정
-    snd_mixer_selem_set_playback_volume_all(m_mixerElem, alsa_vol);
-
-    m_currentVolume = volume_pct;
-    m_currentDistance = distance;
-}
-
-void MainWindow::onDistanceTimer()
-{
-    if (m_serialFd < 0) return;
-
-    int distance = readUS100Distance();
-    if (distance <= 0) return;
-
-    // 필터 없이 바로 볼륨 업데이트
-    updateVolume(distance);
 }
