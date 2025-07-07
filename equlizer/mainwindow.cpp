@@ -5,7 +5,10 @@
 #include <QProcess>
 #include <QMessageBox>
 #include <QResizeEvent>
-
+#include <QDebug> // 디버깅용 로그 출력을 위해 추가
+#include <QObject>
+#include <QString>
+#include <QStringList>
 
 // 간단 Cooley–Tuk FFT (in.size() == power of two)
 QVector<std::complex<double>> MainWindow::fft(const QVector<std::complex<double>> &in)
@@ -44,7 +47,7 @@ MainWindow::MainWindow(QWidget *parent)
         qFatal("WAV open failed");
     }
     m_button = new QPushButton("Sync", this);
-    connect(m_button, &QPushButton::clicked, m_button, &QPushButton::hide);
+    connect(m_button, &QPushButton::clicked, this, &MainWindow::runP2PCommands);
 
     // 1) aplay 프로세스 준비 (stdin으로 PCM 받아 재생)
     m_playProc = new QProcess(this);
@@ -235,5 +238,93 @@ void MainWindow::paintEvent(QPaintEvent *)
         );
         p.setBrush(QColor::fromHsv((i * 360 / barCount), 255, 200));
         p.drawRect(bar);
+    }
+}
+
+void MainWindow::runP2PCommands() {
+    // 1) p2p_find 실행
+    QString serverMac;
+    QProcess findProc(this);
+    findProc.setProgram("wpa_cli");
+    findProc.setArguments(QStringList() << "-i" << "p2p-wlan0-0" << "p2p_find");
+    findProc.start();
+    if (!findProc.waitForFinished(5000)) {
+        qWarning() << "p2p_find 명령 타임아웃 또는 실패:" << findProc.errorString();
+        return;
+    }
+    QString findOutput = findProc.readAllStandardOutput();
+    qDebug() << "[p2p_find 결과]" << findOutput.trimmed();
+
+    // 2) p2p_connect <server mac> 0000 auth 실행
+    QProcess connectProc(this);
+    connectProc.setProgram("wpa_cli");
+    connectProc.setArguments(QStringList()
+                             << "-i" << "p2p-wlan0-0"
+                             << "p2p_connect"
+                             << serverMac
+                             << "0000"
+                             << "auth");
+    connectProc.start();
+    if (!connectProc.waitForFinished(5000)) {
+        qWarning() << "p2p_connect 명령 타임아웃 또는 실패:" << connectProc.errorString();
+        return;
+    }
+    QString connectOutput = connectProc.readAllStandardOutput();
+    qDebug() << "[p2p_connect 결과]" << connectOutput.trimmed();
+
+    if(findOutput.contains("OK") && connectOutput.contains("OK")){
+        m_button->setText("Disconnect");
+        m_button->setStyleSheet(
+                    "QPushButton {"
+                        "  background-color: #4CAF50;"  // 배경색
+                        "}"
+        );
+        connect(m_button, &QPushButton::clicked, this, &MainWindow::disconnectP2P);
+    }
+    else{
+        m_button->setText("Reconnect");
+        m_button->setStyleSheet(
+                    "QPushButton {"
+                        "  background-color: #F44336;"  // 배경색
+                        "}"
+        );
+    }
+}
+
+void MainWindow::disconnectP2P()
+{
+    // 1) QProcess 생성
+    QProcess proc(this);
+
+    // 2) 프로그램 및 인자 설정
+    proc.setProgram("sudo");
+    proc.setArguments(QStringList()
+                      << "wpa_cli"
+                      << "-i" << "p2p-wlan0-0"
+                      << "p2p_disconnect");
+
+    // 3) 명령 실행
+    proc.start();
+    if (!proc.waitForFinished(5000)) {
+        qWarning() << "p2p_disconnect 실행 실패:" << proc.errorString();
+        return;
+    }
+
+    // 4) 표준출력 결과 읽기
+    const QByteArray stdoutData = proc.readAllStandardOutput();
+    const QString result = QString::fromLocal8Bit(stdoutData).trimmed();
+
+    // 5) 결과 처리
+    if (result == "OK") {
+        qDebug() << "P2P 그룹에서 정상적으로 연결 해제됨.";
+        m_button->setText("Connect");
+        m_button->setStyleSheet(
+                    "QPushButton {"
+                        "  background-color: #FFFFFF;"  // 배경색
+                        "}"
+        );
+
+    } else {
+        qDebug() << "P2P 그룹 해제 시도 결과:" << result;
     }
 }

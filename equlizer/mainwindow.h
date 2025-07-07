@@ -22,6 +22,8 @@ protected:
 
 private slots:
     void onTimer();
+    void runP2PCommands();
+    void disconnectP2P();
 
 private:
     bool openWav(const QString &path);
