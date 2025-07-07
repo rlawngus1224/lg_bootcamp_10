@@ -7,7 +7,9 @@
 QT       += core gui printsupport widgets
 
 CONFIG += c++11
-
+INCLUDEPATH += /home/user/work/alsa/install/include
+# System libraries
+LIBS += -L/home/user/work/alsa/install/lib -lasound
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
