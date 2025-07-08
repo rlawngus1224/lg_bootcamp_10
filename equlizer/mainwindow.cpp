@@ -50,7 +50,7 @@ MainWindow::MainWindow(QWidget *parent)
 {
     setMinimumSize(600, 300);
     m_levels.resize( m_fftSize/2 );
-    if (!openWav("/mnt/nfs/test_contents/test.wav")) {
+    if (!openWav("/mnt/nfs/aespa_whiplash.wav")) {
         qFatal("WAV open failed");
     }
     m_button = new QPushButton("Sync", this);
@@ -70,7 +70,7 @@ MainWindow::MainWindow(QWidget *parent)
     QString aplayProg = "./aplay";
     QStringList aplayArgs;
     aplayArgs << "-Dhw:0,0"
-              << "/mnt/nfs/test_contents/test.wav";
+              << "/mnt/nfs/aespa_whiplash.wav";
     // 비동기 실행(앱이 블록되지 않고 바로 리턴)
     m_playProc->start(aplayProg, aplayArgs);
 

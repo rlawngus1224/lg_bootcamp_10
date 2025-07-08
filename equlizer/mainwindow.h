@@ -66,6 +66,6 @@ private:
     static constexpr int DIST_MIN_MM = 100;    // 최소 거리
     static constexpr int DIST_MAX_MM = 1000;   // 최대 거리
     static constexpr int VOL_MIN_PCT = 20;     // 최소 볼륨 %
-    static constexpr int VOL_MAX_PCT = 50;     // 최대 볼륨 %
+    static constexpr int VOL_MAX_PCT = 80;     // 최대 볼륨 %
 };
 #endif // MAINWINDOW_H
