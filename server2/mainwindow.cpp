@@ -25,6 +25,9 @@ MainWindow::MainWindow(QWidget *parent)
     // List page setup
     listPage = new QWidget(this);
     QVBoxLayout *listLayout = new QVBoxLayout(listPage);
+    QFont listFont = listWidget->font();
+    listFont.setPointSize(16);
+    listWidget->setFont(listFont);
     listLayout->addWidget(new QLabel("WAV Files", this));
     listLayout->addWidget(listWidget);
     loadWavList();
