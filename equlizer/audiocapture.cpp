@@ -3,16 +3,14 @@
 
 AudioCapture::AudioCapture(int sampleRate, int channels, int bufFrames, QObject* parent)
     : QObject(parent)
-    , proc_(new QProcess(this))
-    , frameSize_(channels * sizeof(qint16))
-    , bufBytes_(bufFrames * frameSize_)
+    , pcmHandle_(nullptr)
+    , bufFrames_(bufFrames)
+    , timer_(nullptr)
 {
-    // Set process to read raw PCM from arecord
-    connect(proc_, &QProcess::readyReadStandardOutput, this, &AudioCapture::handleReadyRead);
-    connect(proc_, QOverload<QProcess::ProcessError>::of(&QProcess::errorOccurred),
-            this, &AudioCapture::handleProcessError);
-    connect(proc_, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, &AudioCapture::handleFinished);
+    // 프레임당 바이트 = 채널 × 샘플당 바이트(16bit = 2바이트)
+    frameSize_ = channels * sizeof(qint16);
+
+
 }
 
 AudioCapture::~AudioCapture()
@@ -22,53 +20,69 @@ AudioCapture::~AudioCapture()
 
 bool AudioCapture::start()
 {
-    if (proc_->state() != QProcess::NotRunning)
-        return true;
-
-    QStringList args;
-    // use loopback capture device
-    args << "-D" << "Dhw2.0"
-         << "-f" << "S16_LE"
-         << "-c" << QString::number(2)
-         << "-r" << QString::number(44100)
-         << "--period-size" << QString::number(bufBytes_/frameSize_)
-         << "--buffer-size" << QString::number(bufBytes_*4)
-         << "-"; // stdout
-
-    proc_->setProgram("arecord");
-    proc_->setArguments(args);
-    proc_->setReadChannel(QProcess::StandardOutput);
-    proc_->start();
-
-    if (!proc_->waitForStarted()) {
-        qWarning() << "arecord 실행 실패";
+    int err;
+    // loopback 캡처 장치: "plughw:Loopback,1"
+    // 또는 asoundrc 에 default를 loopin 으로 설정했다면 "default"로 열어도 됩니다.
+    if ((err = snd_pcm_open(&pcmHandle_,
+                            "hw:2,0",
+                            SND_PCM_STREAM_CAPTURE,
+                            0)) < 0)
+    {
+        qWarning("Unable to open PCM device: %s", snd_strerror(err));
         return false;
     }
+    // 하드웨어 파라미터 기본 설정
+    snd_pcm_set_params(pcmHandle_,
+                       SND_PCM_FORMAT_S16_LE,  // 16-bit little endian
+                       SND_PCM_ACCESS_RW_INTERLEAVED,
+                       2,                      // 스테레오
+                       44100,                  // 샘플레이트
+                       1,                      // 소프트웨어 resample 허용
+                       500000);                // 지연 0.5초
+
+    if (!timer_) {
+            timer_ = new QTimer(this);
+            // bufFrames_ / sampleRate 간격으로 호출
+            //int intervalMs = static_cast<int>(1000.0 * bufFrames_ / 44100.0);
+            timer_->setInterval(100);
+            connect(timer_, &QTimer::timeout, this, &AudioCapture::capture);
+        }
+        timer_->start();
     return true;
 }
 
 void AudioCapture::stop()
 {
-    if (proc_->state() != QProcess::NotRunning) {
-        proc_->kill();
-        proc_->waitForFinished(1000);
+    if (timer_) timer_->stop();
+    if (pcmHandle_) {
+        snd_pcm_close(pcmHandle_);
+        pcmHandle_ = nullptr;
     }
 }
 
-void AudioCapture::handleReadyRead()
+void AudioCapture::capture()
 {
-    QByteArray data = proc_->read(bufBytes_);
-    if (!data.isEmpty()) {
-        emit audioDataReady(data);
+//    qDebug() << "debug20";
+    if (!pcmHandle_) return;
+//    qDebug() << "debug22";
+    int bytesToRead = bufFrames_ * frameSize_;
+    QByteArray buffer(bytesToRead, 0);
+
+    // ALSA에서 PCM 프레임 읽기
+    snd_pcm_wait(pcmHandle_, 1000);
+    int framesRead = snd_pcm_readi(pcmHandle_,
+                                   buffer.data(),
+                                   bufFrames_);
+//    qDebug() << "debug21";
+    if (framesRead < 0) {
+        // 언더런 발생 시 다시 준비
+        snd_pcm_prepare(pcmHandle_);
+        return;
     }
-}
+    // 실제 읽은 바이트 수
+    int bytesRead = framesRead * frameSize_;
+    buffer.resize(bytesRead);
 
-void AudioCapture::handleProcessError(QProcess::ProcessError err)
-{
-    qWarning() << "arecord error:" << err;
-}
-
-void AudioCapture::handleFinished(int exitCode, QProcess::ExitStatus status)
-{
-    qWarning() << "arecord finished:" << exitCode << status;
+//    qDebug() << "debug2";
+    emit audioDataReady(buffer);
 }

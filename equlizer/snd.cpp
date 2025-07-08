@@ -1,5 +1,3 @@
-3. audiocapture.cpp
-
 #include "audiocapture.h"
 #include <QDebug>
 
@@ -88,8 +86,6 @@ void AudioCapture::capture()
     qDebug() << "debug2";
     emit audioDataReady(buffer);
 }
-
-4. audiocapture.h
 
 // AudioCapture.h
 #pragma once

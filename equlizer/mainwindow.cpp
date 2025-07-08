@@ -62,33 +62,6 @@ MainWindow::MainWindow(QWidget *parent)
     m_button = new QPushButton("Sync", this);
     connect(m_button, &QPushButton::clicked, this, &MainWindow::runP2PCommands);
     initVolumeControl();
-    // 1) aplay 프로세스 준비 (stdin으로 PCM 받아 재생)
-    m_playProc = new QProcess(this);
-/*
-    QString amixerProg = "./amixer";
-    QStringList amixerArgs;
-    amixerArgs << "-c" << "0"
-               << "cset" << "numid=1" << "80%";
-    // 동기 실행(결과 코드가 필요 없으면 execute, 필요하면 반환값 체크)
-    QProcess::execute(amixerProg, amixerArgs);
-*/
-    // WAV 파일 재생
-    QString aplayProg = "./aplay";
-    QStringList aplayArgs;
-    aplayArgs << "-Dhw:0,0"
-              << "-f"   << "S16_LE"
-              << "-c"   << "2"
-              << "-r"   << "44100"
-              //<< "-t" << "raw"
-              << "/mnt/nfs/test_contents/test.wav";
-    // 비동기 실행(앱이 블록되지 않고 바로 리턴)
-    m_playProc->start(aplayProg, aplayArgs);
-
-
-    if (!m_playProc->waitForStarted()) {
-        QMessageBox::critical(this, "Error", "aplay 실행 실패");
-        return;
-    }
 
     // ——— 10FPS용 계산 ———
     // 1/10초마다 읽을 샘플 수
@@ -103,7 +76,7 @@ MainWindow::MainWindow(QWidget *parent)
     QThread* audioThread = new QThread(this);
 
     // 2) 오디오 캡처 객체 생성
-    m_capturer = new AudioCapture(44100, 2, 4410, nullptr); //4410 reason: 44100/10fps
+    m_capturer = new AudioCapture(44100, 2, 44100, nullptr); //4410 reason: 44100/10fps
     m_capturer->moveToThread(audioThread);
     connect(audioThread, &QThread::started, m_capturer, &AudioCapture::start);
     connect(audioThread, &QThread::finished, m_capturer, &QObject::deleteLater);
@@ -113,11 +86,11 @@ MainWindow::MainWindow(QWidget *parent)
     // 6) audioThread 시작
     audioThread->start();
 
-    qDebug() << "debug3";
+//    qDebug() << "debug3";
     connect(m_capturer, &AudioCapture::audioDataReady,
                this,        &MainWindow::onAudioData);
 
-    qDebug() << "debug4";
+//    qDebug() << "debug4";
         // US100 초기화
     if (!initializeUS100()) {
         QMessageBox::warning(this, "Error", "Failed to initialize US100 sensor");
@@ -127,7 +100,7 @@ MainWindow::MainWindow(QWidget *parent)
         m_distanceTimer->start(100);
     }
 
-    qDebug() << "debug5";
+//    qDebug() << "debug5";
 
 }
 
@@ -267,7 +240,7 @@ void MainWindow::readHeader()
 
 void MainWindow::onTimer()
 {
-    qDebug() << "debug10";
+//    qDebug() << "debug10";
     QByteArray buf;
     {
         QMutexLocker lk(&m_pcmQueueLock);
@@ -276,14 +249,14 @@ void MainWindow::onTimer()
             m_pcmQueue.pop_front();
         }
     }
-    qDebug() << "debug12";
+//    qDebug() << "debug12";
 
     if (buf.isEmpty()) {
     // 아직 캡처된 데이터가 없으면 그림만 갱신
         update();
         return;
     }
-    qDebug() << "debug11";
+//    qDebug() << "debug11";
     const int bytesPerSample = m_bitsPerSample/8;
     const int chunkBytes    = m_samplesPerFrame * bytesPerSample * m_channels;
     //QByteArray buf = m_file.read(chunkBytes);
@@ -291,7 +264,7 @@ void MainWindow::onTimer()
 
     // 1) aplay 프로세스에 똑같은 버퍼 쓰기 → 정확히 이 타이밍의 오디오 출력
     //m_playProc->write(buf);
-    qDebug() << "debug13";
+//    qDebug() << "debug13";
 
     // (2) 읽은 샘플을 FFT 링 버퍼에 추가 (모노 변환)
     for (int i = 0; i < m_samplesPerFrame; ++i) {
@@ -305,7 +278,7 @@ void MainWindow::onTimer()
         if (m_fftBuffer.size() > quint32(m_fftSize))
             m_fftBuffer.pop_front();
     }
-    qDebug() << "debug14";
+//    qDebug() << "debug14";
     // (3) 충분히 쌓였으면 FFT 수행
     if (m_fftBuffer.size() == quint32(m_fftSize)) {
         auto spectrum = fft(m_fftBuffer);
@@ -315,7 +288,7 @@ void MainWindow::onTimer()
         }
         update();  // paintEvent 트리거
     }
-    qDebug() << "debug15";
+//    qDebug() << "debug15";
 }
 
 void MainWindow::paintEvent(QPaintEvent *)
@@ -372,7 +345,7 @@ void MainWindow::paintEvent(QPaintEvent *)
         p.setBrush(QColor::fromHsv((i * 360 / barCount), 255, 200));
         p.drawRect(bar);
     }
-    qDebug() << "debug30";
+//    qDebug() << "debug30";
 }
 
 bool MainWindow::initializeUS100()
@@ -473,90 +446,97 @@ void MainWindow::onDistanceTimer()
 }
 
 
-void MainWindow::runP2PCommands() {
-            // 1) p2p_find 실행
-            QString serverMac;
-            QProcess findProc(this);
-            findProc.setProgram("wpa_cli");
-            findProc.setArguments(QStringList() << "-i" << "p2p-wlan0-0" << "p2p_find");
-            findProc.start();
-            if (!findProc.waitForFinished(5000)) {
-                qWarning() << "p2p_find 명령 타임아웃 또는 실패:" << findProc.errorString();
-                return;
-            }
-            QString findOutput = findProc.readAllStandardOutput();
-            qDebug() << "[p2p_find 결과]" << findOutput.trimmed();
+void MainWindow::runP2PCommands()
+{
+    auto execSync = [&](const QString &program, const QStringList &args, int timeout = 5000) -> QString {
+        QProcess proc(this);
+        proc.setProgram(program);
+        proc.setArguments(args);
+        proc.start();
+        if (!proc.waitForFinished(timeout)) {
+            qWarning() << program << args << "command time out:" << proc.errorString();
+            return QString();
+        }
+        return proc.readAllStandardOutput().trimmed();
+    };
 
-            // 2) p2p_connect <server mac> 0000 auth 실행
-            QProcess connectProc(this);
-            connectProc.setProgram("wpa_cli");
-            connectProc.setArguments(QStringList()
-                                     << "-i" << "p2p-wlan0-0"
-                                     << "p2p_connect"
-                                     << serverMac
-                                     << "0000"
-                                     << "auth");
-            connectProc.start();
-            if (!connectProc.waitForFinished(5000)) {
-                qWarning() << "p2p_connect 명령 타임아웃 또는 실패:" << connectProc.errorString();
-                return;
-            }
-            QString connectOutput = connectProc.readAllStandardOutput();
-            qDebug() << "[p2p_connect 결과]" << connectOutput.trimmed();
+    // 1) 스캔 시작
+    execSync("wpa_cli", { "-i", "wlan0", "scan" });
 
-            if(findOutput.contains("OK") && connectOutput.contains("OK")){
-                m_button->setText("Disconnect");
-                m_button->setStyleSheet(
-                            "QPushButton {"
-                                "  background-color: #4CAF50;"  // 배경색
-                                "}"
-                );
-                connect(m_button, &QPushButton::clicked, this, &MainWindow::disconnectP2P);
-            }
-            else{
-                m_button->setText("Reconnect");
-                m_button->setStyleSheet(
-                            "QPushButton {"
-                                "  background-color: #F44336;"  // 배경색
-                                "}"
-                );
+    // 2) 스캔 결과 확인
+    QString scanRes = execSync("wpa_cli", { "-i", "wlan0", "scan_results" });
+    qDebug() << "[scan_results]" << scanRes;
+
+    // 3) MySnapcastAP이 list_networks에 올라올 때까지 최대 5초(500ms 간격으로 10회) 대기
+    bool found = false;
+    for (int i = 0; i < 10; ++i) {
+        QString listNet = execSync("wpa_cli", { "-i", "wlan0", "list_networks" });
+        qDebug() << "[list_networks]" << listNet;
+        // 예시 출력: network id / ssid / bssid / flags
+        // we look for a line containing "\tMySnapcastAP\t"
+        for (const QString &line : listNet.split('\n')) {
+            if (line.contains("\tMySnapcastAP\t")) {
+                found = true;
+                break;
             }
         }
+        if (found) break;
+        QThread::msleep(500);
+    }
+    if (!found) {
+        QMessageBox::warning(this, "Error", "can't find MySnapcastAP network");
+        return;
+    }
 
-        void MainWindow::disconnectP2P()
-        {
-            // 1) QProcess 생성
-            QProcess proc(this);
+    // 4) 네트워크 선택 (id 0)
+    QString sel = execSync("wpa_cli", { "-i", "wlan0", "select_network", "0" });
+    qDebug() << "[select_network]" << sel;
+    if (!sel.contains("OK")) {
+        QMessageBox::warning(this, "Error", "select network fail: " + sel);
+        return;
+    }
 
-            // 2) 프로그램 및 인자 설정
-            proc.setProgram("sudo");
-            proc.setArguments(QStringList()
-                              << "wpa_cli"
-                              << "-i" << "p2p-wlan0-0"
-                              << "p2p_disconnect");
+    // 5) DHCP 요청
+    QString dhcp = execSync("udhcpc", { "-i", "wlan0" }, 10000);
+    qDebug() << "[udhcpc]" << dhcp;
+    // 실패 체크는 로그만 남기고 계속 진행
 
-            // 3) 명령 실행
-            proc.start();
-            if (!proc.waitForFinished(5000)) {
-                qWarning() << "p2p_disconnect 실행 실패:" << proc.errorString();
-                return;
-            }
+    // 6) snapclient 백그라운드 실행
+    QString snapCmd = "/root/snapclient";
+    //Low
+    QStringList snapArgs = {
+        "tcp://192.168.4.1:1704",
+        "--sampleformat", "48000:16:*",
+        "--Latency", "300"
+    };
+//    //Original
+//    QStringList snapArgs = {
+//        "tcp://192.168.4.1:1705",
+//        "--sampleformat", "48000:16:*",
+//        "--Latency", "300"
+//    };
+//    //High
+//    QStringList snapArgs = {
+//        "tcp://192.168.4.1:1706",
+//        "--sampleformat", "48000:16:*",
+//        "--Latency", "300"
+//    };
+    QProcess *snapProc = new QProcess(this);
+    snapProc->setProgram(snapCmd);
+    snapProc->setArguments(snapArgs);
+    snapProc->setProcessChannelMode(QProcess::MergedChannels);
+    snapProc->startDetached();
 
-            // 4) 표준출력 결과 읽기
-            const QByteArray stdoutData = proc.readAllStandardOutput();
-            const QString result = QString::fromLocal8Bit(stdoutData).trimmed();
+    // 7) 버튼 상태 업데이트
+    m_button->setText("Connected");
+    m_button->setStyleSheet(
+        "QPushButton {"
+        "  background-color: #4CAF50;"
+        "}"
+    );
+    // Disconnect 슬롯 대신 다시 이 함수를 호출하도록 연결
+    disconnect(m_button, &QPushButton::clicked, nullptr, nullptr);
+    connect(m_button, &QPushButton::clicked, this, &MainWindow::runP2PCommands);
 
-            // 5) 결과 처리
-            if (result == "OK") {
-                qDebug() << "P2P 그룹에서 정상적으로 연결 해제됨.";
-                m_button->setText("Connect");
-                m_button->setStyleSheet(
-                            "QPushButton {"
-                                "  background-color: #FFFFFF;"  // 배경색
-                                "}"
-                );
-
-            } else {
-                qDebug() << "P2P 그룹 해제 시도 결과:" << result;
-            }
-        }
+    qDebug() << "Snapclient start completed";
+}
