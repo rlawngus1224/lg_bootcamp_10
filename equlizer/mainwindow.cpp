@@ -10,6 +10,12 @@
 #include <unistd.h>
 #include <algorithm>
 #include <QDebug> // 디버깅용 로그 출력을 위해 추가
+#include "audiocapture.h"
+#include <QThread>
+#include <QObject>
+#include <QString>
+#include <QStringList>
+
 
 // 간단 Cooley–Tuk FFT (in.size() == power of two)
 QVector<std::complex<double>> MainWindow::fft(const QVector<std::complex<double>> &in)
@@ -54,25 +60,30 @@ MainWindow::MainWindow(QWidget *parent)
         qFatal("WAV open failed");
     }
     m_button = new QPushButton("Sync", this);
-    connect(m_button, &QPushButton::clicked, m_button, &QPushButton::hide);
+    connect(m_button, &QPushButton::clicked, this, &MainWindow::runP2PCommands);
     initVolumeControl();
     // 1) aplay 프로세스 준비 (stdin으로 PCM 받아 재생)
     m_playProc = new QProcess(this);
-
+/*
     QString amixerProg = "./amixer";
     QStringList amixerArgs;
     amixerArgs << "-c" << "0"
                << "cset" << "numid=1" << "80%";
     // 동기 실행(결과 코드가 필요 없으면 execute, 필요하면 반환값 체크)
     QProcess::execute(amixerProg, amixerArgs);
-
+*/
     // WAV 파일 재생
     QString aplayProg = "./aplay";
     QStringList aplayArgs;
     aplayArgs << "-Dhw:0,0"
+              << "-f"   << "S16_LE"
+              << "-c"   << "2"
+              << "-r"   << "44100"
+              //<< "-t" << "raw"
               << "/mnt/nfs/test_contents/test.wav";
     // 비동기 실행(앱이 블록되지 않고 바로 리턴)
     m_playProc->start(aplayProg, aplayArgs);
+
 
     if (!m_playProc->waitForStarted()) {
         QMessageBox::critical(this, "Error", "aplay 실행 실패");
@@ -87,6 +98,26 @@ MainWindow::MainWindow(QWidget *parent)
 
     connect(m_timer, &QTimer::timeout, this, &MainWindow::onTimer);
     m_timer->start(100);
+
+    // 1) 스레드 생성
+    QThread* audioThread = new QThread(this);
+
+    // 2) 오디오 캡처 객체 생성
+    m_capturer = new AudioCapture(44100, 2, 4410, nullptr); //4410 reason: 44100/10fps
+    m_capturer->moveToThread(audioThread);
+    connect(audioThread, &QThread::started, m_capturer, &AudioCapture::start);
+    connect(audioThread, &QThread::finished, m_capturer, &QObject::deleteLater);
+    connect(this, &MainWindow::destroyed, audioThread, &QThread::quit);
+    connect(audioThread, &QThread::finished, audioThread, &QObject::deleteLater);
+
+    // 6) audioThread 시작
+    audioThread->start();
+
+    qDebug() << "debug3";
+    connect(m_capturer, &AudioCapture::audioDataReady,
+               this,        &MainWindow::onAudioData);
+
+    qDebug() << "debug4";
         // US100 초기화
     if (!initializeUS100()) {
         QMessageBox::warning(this, "Error", "Failed to initialize US100 sensor");
@@ -95,6 +126,9 @@ MainWindow::MainWindow(QWidget *parent)
         connect(m_distanceTimer, &QTimer::timeout, this, &MainWindow::onDistanceTimer);
         m_distanceTimer->start(100);
     }
+
+    qDebug() << "debug5";
+
 }
 
 MainWindow::~MainWindow()
@@ -112,6 +146,16 @@ MainWindow::~MainWindow()
         ::close(m_serialFd);
     }
     delete m_distanceTimer;
+    if (m_capturer) {
+        QMetaObject::invokeMethod(m_capturer, "stop", Qt::QueuedConnection);
+    }
+}
+
+void MainWindow::onAudioData(const QByteArray &pcm)
+{
+    QMutexLocker lk(&m_pcmQueueLock);
+    m_pcmQueue.push_back(pcm);
+    if (m_pcmQueue.size() > 5) m_pcmQueue.pop_front();
 }
 
 // ALSA 믹서 초기화 함수
@@ -223,23 +267,31 @@ void MainWindow::readHeader()
 
 void MainWindow::onTimer()
 {
-    const int bytesPerSample = m_bitsPerSample/8;
-    const int chunkBytes    = m_samplesPerFrame * bytesPerSample * m_channels;
-    QByteArray buf = m_file.read(chunkBytes);
-
-    if (buf.size() < chunkBytes) {
-        // 파일 끝: 더 이상 처리하지 않고 종료
-        m_timer->stop();
-        if (m_playProc) {
-            m_playProc->closeWriteChannel();
-            m_playProc->waitForFinished();
+    qDebug() << "debug10";
+    QByteArray buf;
+    {
+        QMutexLocker lk(&m_pcmQueueLock);
+        if (!m_pcmQueue.empty()) {
+            buf = m_pcmQueue.front();
+            m_pcmQueue.pop_front();
         }
-        m_file.close();
+    }
+    qDebug() << "debug12";
+
+    if (buf.isEmpty()) {
+    // 아직 캡처된 데이터가 없으면 그림만 갱신
+        update();
         return;
     }
+    qDebug() << "debug11";
+    const int bytesPerSample = m_bitsPerSample/8;
+    const int chunkBytes    = m_samplesPerFrame * bytesPerSample * m_channels;
+    //QByteArray buf = m_file.read(chunkBytes);
+
 
     // 1) aplay 프로세스에 똑같은 버퍼 쓰기 → 정확히 이 타이밍의 오디오 출력
-    m_playProc->write(buf);
+    //m_playProc->write(buf);
+    qDebug() << "debug13";
 
     // (2) 읽은 샘플을 FFT 링 버퍼에 추가 (모노 변환)
     for (int i = 0; i < m_samplesPerFrame; ++i) {
@@ -253,7 +305,7 @@ void MainWindow::onTimer()
         if (m_fftBuffer.size() > quint32(m_fftSize))
             m_fftBuffer.pop_front();
     }
-
+    qDebug() << "debug14";
     // (3) 충분히 쌓였으면 FFT 수행
     if (m_fftBuffer.size() == quint32(m_fftSize)) {
         auto spectrum = fft(m_fftBuffer);
@@ -263,6 +315,7 @@ void MainWindow::onTimer()
         }
         update();  // paintEvent 트리거
     }
+    qDebug() << "debug15";
 }
 
 void MainWindow::paintEvent(QPaintEvent *)
@@ -319,6 +372,7 @@ void MainWindow::paintEvent(QPaintEvent *)
         p.setBrush(QColor::fromHsv((i * 360 / barCount), 255, 200));
         p.drawRect(bar);
     }
+    qDebug() << "debug30";
 }
 
 bool MainWindow::initializeUS100()
@@ -417,3 +471,92 @@ void MainWindow::onDistanceTimer()
     // 필터 없이 바로 볼륨 업데이트
     updateVolume(distance);
 }
+
+
+void MainWindow::runP2PCommands() {
+            // 1) p2p_find 실행
+            QString serverMac;
+            QProcess findProc(this);
+            findProc.setProgram("wpa_cli");
+            findProc.setArguments(QStringList() << "-i" << "p2p-wlan0-0" << "p2p_find");
+            findProc.start();
+            if (!findProc.waitForFinished(5000)) {
+                qWarning() << "p2p_find 명령 타임아웃 또는 실패:" << findProc.errorString();
+                return;
+            }
+            QString findOutput = findProc.readAllStandardOutput();
+            qDebug() << "[p2p_find 결과]" << findOutput.trimmed();
+
+            // 2) p2p_connect <server mac> 0000 auth 실행
+            QProcess connectProc(this);
+            connectProc.setProgram("wpa_cli");
+            connectProc.setArguments(QStringList()
+                                     << "-i" << "p2p-wlan0-0"
+                                     << "p2p_connect"
+                                     << serverMac
+                                     << "0000"
+                                     << "auth");
+            connectProc.start();
+            if (!connectProc.waitForFinished(5000)) {
+                qWarning() << "p2p_connect 명령 타임아웃 또는 실패:" << connectProc.errorString();
+                return;
+            }
+            QString connectOutput = connectProc.readAllStandardOutput();
+            qDebug() << "[p2p_connect 결과]" << connectOutput.trimmed();
+
+            if(findOutput.contains("OK") && connectOutput.contains("OK")){
+                m_button->setText("Disconnect");
+                m_button->setStyleSheet(
+                            "QPushButton {"
+                                "  background-color: #4CAF50;"  // 배경색
+                                "}"
+                );
+                connect(m_button, &QPushButton::clicked, this, &MainWindow::disconnectP2P);
+            }
+            else{
+                m_button->setText("Reconnect");
+                m_button->setStyleSheet(
+                            "QPushButton {"
+                                "  background-color: #F44336;"  // 배경색
+                                "}"
+                );
+            }
+        }
+
+        void MainWindow::disconnectP2P()
+        {
+            // 1) QProcess 생성
+            QProcess proc(this);
+
+            // 2) 프로그램 및 인자 설정
+            proc.setProgram("sudo");
+            proc.setArguments(QStringList()
+                              << "wpa_cli"
+                              << "-i" << "p2p-wlan0-0"
+                              << "p2p_disconnect");
+
+            // 3) 명령 실행
+            proc.start();
+            if (!proc.waitForFinished(5000)) {
+                qWarning() << "p2p_disconnect 실행 실패:" << proc.errorString();
+                return;
+            }
+
+            // 4) 표준출력 결과 읽기
+            const QByteArray stdoutData = proc.readAllStandardOutput();
+            const QString result = QString::fromLocal8Bit(stdoutData).trimmed();
+
+            // 5) 결과 처리
+            if (result == "OK") {
+                qDebug() << "P2P 그룹에서 정상적으로 연결 해제됨.";
+                m_button->setText("Connect");
+                m_button->setStyleSheet(
+                            "QPushButton {"
+                                "  background-color: #FFFFFF;"  // 배경색
+                                "}"
+                );
+
+            } else {
+                qDebug() << "P2P 그룹 해제 시도 결과:" << result;
+            }
+        }

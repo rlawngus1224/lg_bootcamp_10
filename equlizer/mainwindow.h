@@ -10,6 +10,8 @@
 #include <QPushButton>
 #include <deque>
 #include <alsa/asoundlib.h>
+#include "audiocapture.h"
+#include <QMutex>
 
 class MainWindow : public QMainWindow
 {
@@ -25,11 +27,17 @@ protected:
 private slots:
     void onTimer();
     void onDistanceTimer();  // 거리 측정용 타이머 슬롯
+    void runP2PCommands();
+    void disconnectP2P();
+    void onAudioData(const QByteArray &pcm);
+
 private:
     bool openWav(const QString &path);
     void readHeader();
     QVector<std::complex<double>> fft(const QVector<std::complex<double>> &in);
-    
+    AudioCapture* m_capturer;
+    std::deque<QByteArray> m_pcmQueue;      // 들어오는 청크 저장
+    QMutex                 m_pcmQueueLock; // 안전한 접근용
     // US100 관련 함수
     bool initializeUS100();
     int readUS100Distance();
