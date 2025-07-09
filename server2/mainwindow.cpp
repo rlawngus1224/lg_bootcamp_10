@@ -7,6 +7,7 @@
 #include <QDataStream>
 #include <QDebug>
 #include <unistd.h>
+#include <QRegularExpression>
 
 static quint32 readUInt32(QDataStream &in) {
     quint32 val;
@@ -36,7 +37,7 @@ MainWindow::MainWindow(QWidget *parent)
     waveFont.setPointSize(waveFont.pointSize() + 8);
     waveLabel->setFont(waveFont);
     listWidget->setFont(waveFont);
-    listWidget->setStyleSheet("font-size: 16pt;");
+    listWidget->setStyleSheet("font-size: 20pt;");
     listLayout->addWidget(waveLabel);
     listLayout->addWidget(listWidget);
     loadWavList();
@@ -123,7 +124,7 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::loadWavList() {
-    QString path = "/mnt/nfs";
+    QString path = "/root";
     QDir dir(path);
     QStringList filters {"*.wav"};
     auto files = dir.entryInfoList(filters, QDir::Files);
@@ -138,8 +139,11 @@ int MainWindow::getWavDuration(const QString &filePath) {
     QDataStream in(&file);
     in.setByteOrder(QDataStream::LittleEndian);
 
-    in.skipRawData(12); // RIFF header
-    char chunkId[4];
+    // 1) RIFF 헤더 스킵
+    in.skipRawData(12);
+
+    // 2) fmt 청크 찾기
+    char   chunkId[4];
     quint32 chunkSize;
     quint16 blockAlign = 0;
     quint32 sampleRate = 0;
@@ -149,11 +153,23 @@ int MainWindow::getWavDuration(const QString &filePath) {
         chunkSize = readUInt32(in);
         QString id = QString::fromLatin1(chunkId,4);
         if (id == "fmt ") {
-            in.skipRawData(int(chunkSize));
+            // fmt 청크 본문 읽기 (16바이트)
+            quint16 audioFormat, numChannels, bitsPerSample;
+            quint32 byteRate;
+            in >> audioFormat    // 2
+               >> numChannels    // 2
+               >> sampleRate     // 4
+               >> byteRate       // 4
+               >> blockAlign     // 2
+               >> bitsPerSample; // 2  ← 이 부분이 빠져 있었음
+
+            // fmt 청크에 확장 데이터(16바이트 초과)가 있으면 스킵
+            if (chunkSize > 16)
+                in.skipRawData(int(chunkSize - 16));
             break;
         } else {
-            // 다른 청크면 건너뛰기
-            in.skipRawData(chunkSize);
+            // 다른 청크면 본문 크기만큼 스킵
+            in.skipRawData(int(chunkSize));
         }
     }
 
@@ -166,16 +182,24 @@ int MainWindow::getWavDuration(const QString &filePath) {
             dataSize = chunkSize;
             break;
         }
-        in.skipRawData(chunkSize);
+        in.skipRawData(int(chunkSize));
     }
     file.close();
 
-    // Fallback if unknown
-    if (sampleRate == 0 || blockAlign == 0) return 0;
+    if (sampleRate == 0 || blockAlign == 0 || dataSize == 0) {
+        qDebug() << "[getWavDuration] 읽기 실패:"
+                 << "sampleRate=" << sampleRate
+                 << "blockAlign="  << blockAlign
+                 << "dataSize="    << dataSize;
+        return 0;
+    }
+
+    // 4) 재생 시간 계산
     double sampleCount = double(dataSize) / blockAlign;
     double durationSec = sampleCount / sampleRate;
     return int(durationSec + 0.5);
 }
+
 
 void MainWindow::startSnapServers() {
     qDebug() << "[MainWindow] Starting Snapcast servers...";
@@ -187,7 +211,7 @@ void MainWindow::startSnapServers() {
     auto startProc = [&](QProcess *&proc, const QString &pipe, int httpPort, int tcpPort, int streamPort, 
                          void (MainWindow::*slot)(), QLabel *lbl){
         proc = new QProcess(this);
-        QString prog = "./snapserver";
+        QString prog = "/root/snapserver";
         QStringList args = {
             "--http.bind_to_address=192.168.4.1", QString("--http.port=%1").arg(httpPort),
             "--tcp.bind_to_address=192.168.4.1", QString("--tcp.port=%1").arg(tcpPort),
@@ -226,34 +250,78 @@ void MainWindow::startSnapServers() {
 
 void MainWindow::onSnapOutputLow() {
     if (!procSnapLow) return;
-    auto out = procSnapLow->readAllStandardOutput();
-    if (!out.isEmpty()) {
-        qDebug() << "[SnapLow stdout]" << out;
-        lblClient1->setText("Client1 Connected");
+
+    // 1) 프로세스 stdout 읽기
+    QByteArray data = procSnapLow->readAllStandardOutput();
+    QString out = QString::fromUtf8(data);
+    qDebug() << "[SnapLow stdout]" << out;
+    // 2) MAC 주소 파싱: "Hello from b8:27:eb:9d:e5:c8,"
+    static const QRegularExpression macRx(R"(Hello from\s+([0-9A-Fa-f:]+),)");
+    QRegularExpressionMatch match = macRx.match(out);
+    if (match.hasMatch()) {
+        QString mac = match.captured(1);
+        qDebug() << "[SnapLow] Detected MAC:" << mac;
+        // 지정된 MAC과 일치할 때만 상태 변경
+        if (mac.compare("b8:27:eb:9d:e5:c8", Qt::CaseInsensitive) == 0) {
+            lblClient1->setText("Client1 Connected (Low)");
+        }
     }
 }
 
 void MainWindow::onSnapOutputHigh() {
-    if (!procSnapHigh) return;
-    auto out = procSnapHigh->readAllStandardOutput();
-    if (!out.isEmpty()) {
-        qDebug() << "[SnapHigh stdout]" << out;
-        lblClient2->setText("Client2 Connected");
+    if (!procSnapLow) return;
+
+    // 1) 프로세스 stdout 읽기
+    QByteArray data = procSnapLow->readAllStandardOutput();
+    QString out = QString::fromUtf8(data);
+    qDebug() << "[SnapHigh stdout]" << out;
+    // 2) MAC 주소 파싱: "Hello from B8:27:EB:FF:7D:4A,"
+    static const QRegularExpression macRx(R"(Hello from\s+([0-9A-Fa-f:]+),)");
+    QRegularExpressionMatch match = macRx.match(out);
+    if (match.hasMatch()) {
+        QString mac = match.captured(1);
+        qDebug() << "[SnapHigh] Detected MAC:" << mac;
+        // 지정된 MAC과 일치할 때만 상태 변경
+        if (mac.compare("b8:27:eb:ff:7d:4a", Qt::CaseInsensitive) == 0) {
+            lblClient2->setText("Client2 Connected (High)");
+        }
     }
 }
 
 void MainWindow::onSnapOutputOrigin() {
-    if (!procSnapOrigin) return;
-    auto out = procSnapOrigin->readAllStandardOutput();
-    if (!out.isEmpty()) {
-        qDebug() << "[SnapOrigin stdout]" << out;
-        lblClient3->setText("Client3 Connected");
+    if (!procSnapLow) return;
+
+    // 1) 프로세스 stdout 읽기
+    QByteArray data = procSnapLow->readAllStandardOutput();
+    QString out = QString::fromUtf8(data);
+    qDebug() << "[SnapOrigin stdout]" << out;
+
+    // 2) MAC 주소 파싱: "Hello from B8:27:EB:CC:FE:F3,"
+    static const QRegularExpression macRx(R"(Hello from\s+([0-9A-Fa-f:]+),)");
+    QRegularExpressionMatch match = macRx.match(out);
+    if (match.hasMatch()) {
+        QString mac = match.captured(1);
+        qDebug() << "[SnapLow] Detected MAC:" << mac;
+        // 지정된 MAC과 일치할 때만 상태 변경
+        if (mac.compare("b8:27:eb:cc:fe:f3", Qt::CaseInsensitive) == 0) {
+            lblClient3->setText("Client3 Connected (Origin)");
+        }
     }
 }
 
 void MainWindow::onFileDoubleClicked(QListWidgetItem *item) {
     QString filePath = item->text();
     qDebug() << "[MainWindow] File selected for playback:" << filePath;
+    QFont titleFont = titleLabel->font();
+    titleFont.setPointSize(titleFont.pointSize() + 10);        // 원래보다 6pt 크게
+    titleLabel->setFont(titleFont);
+    titleLabel->setAlignment(Qt::AlignCenter);
+
+    // 재생 정보
+    QFont timeFont = timeLabel->font();
+    timeFont.setPointSize(timeFont.pointSize() + 8);         // 원래보다 4pt 크게
+    timeLabel->setFont(timeFont);
+    timeLabel->setAlignment(Qt::AlignCenter);
     totalDuration = getWavDuration(filePath);
     currentPosition = 0;
     titleLabel->setText(QFileInfo(filePath).fileName());
