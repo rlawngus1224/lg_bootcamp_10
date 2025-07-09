@@ -97,6 +97,7 @@ MainWindow::MainWindow(QWidget *parent)
     } else {
         // 거리 측정 타이머 설정 (100ms 간격)
         connect(m_distanceTimer, &QTimer::timeout, this, &MainWindow::onDistanceTimer);
+
     }
 
 //    qDebug() << "debug5";
@@ -458,11 +459,11 @@ void MainWindow::updateVolumeInverse(int distance)
     int volume_pct = VOL_MIN_PCT
                    + int(inv * (VOL_MAX_PCT - VOL_MIN_PCT) + 0.5);
     // 6) ALSA 실제 볼륨으로 변환 & 적용
-    long alsa_vol = (m_volMax - m_volMin) * volume_pct / 100 + m_volMin;
+    long alsa_vol = (m_volMax - m_volMin) * 70 / 100 + m_volMin;
     snd_mixer_selem_set_playback_volume_all(m_mixerElem, alsa_vol);
 
     // 7) 상태 업데이트
-    m_currentVolume  = volume_pct;
+    m_currentVolume  = 70;
 }
 
 void MainWindow::onDistanceTimer()
@@ -537,7 +538,7 @@ void MainWindow::runP2PCommands()
 
     // 6) snapclient 백그라운드 실행
     QString snapCmd = "/root/snapclient";
-    // Low
+    //Low
    QStringList snapArgs = {
        "tcp://192.168.4.1:1704",
        "--sampleformat", "48000:16:*",
@@ -555,43 +556,27 @@ void MainWindow::runP2PCommands()
 //        "--sampleformat", "48000:16:*",
 //        "--Latency", "300"
 //    };
-   if (m_snapProc) {
-       m_snapProc->deleteLater();
-   }
-   m_snapProc = new QProcess(this);
-   m_snapProc->setProgram(snapCmd);
-   m_snapProc->setArguments(snapArgs);
-   m_snapProc->setProcessChannelMode(QProcess::MergedChannels);
-   // 로그 읽어서 Connected 감지
-   connect(m_snapProc, &QProcess::readyReadStandardOutput,
-           this,       &MainWindow::onSnapClientOutput);
-   m_snapProc->start();  // 비동기 실행
+    QProcess *snapProc = new QProcess(this);
+    snapProc->setProgram(snapCmd);
+    snapProc->setArguments(snapArgs);
+    snapProc->setProcessChannelMode(QProcess::MergedChannels);
+    snapProc->startDetached();
+
+    // 7) 버튼 상태 업데이트
+    m_button->setText("Connected");
+    m_button->setStyleSheet(
+        "QPushButton {"
+        "  background-color: #4CAF50;"
+        "}"
+    );
+
+    qDebug() << "Snapclient started, waiting for connection log…";
+
+    // 버튼 클릭 시 재연결되도록 시그널 재설정 (원래 의도대로)
+    disconnect(m_button, &QPushButton::clicked, nullptr, nullptr);
+    m_distanceTimer->start(100);
+    connect(m_button, &QPushButton::clicked,
+            this,       &MainWindow::runP2PCommands);
 }
 
 
-void MainWindow::onSnapClientOutput()
-{
-    if (!m_snapProc) return;
-
-    QByteArray raw = m_snapProc->readAllStandardOutput();
-    QString out = QString::fromUtf8(raw);
-    qDebug().noquote() << "[SnapClient]" << out;
-
-    if (out.contains("Connected to 192.168.4.1")) {
-        // 1) 버튼 UI 업데이트
-        m_button->setText("Connected");
-        m_button->setStyleSheet(R"(
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-            }
-        )");
-
-        // 2) 이제야 거리 측정 타이머 시작
-        m_distanceTimer->start(100);
-        
-        // 3) 더는 이 슬롯에서 볼 필요 없으면 끊어도 됩니다.
-        disconnect(m_snapProc, &QProcess::readyReadStandardOutput,
-                   this,       &MainWindow::onSnapClientOutput);
-    }
-}

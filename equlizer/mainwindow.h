@@ -29,7 +29,6 @@ private slots:
     void onDistanceTimer();  // 거리 측정용 타이머 슬롯
     void runP2PCommands();
     void onAudioData(const QByteArray &pcm);
-    void onSnapClientOutput();
 
 private:
     void readHeader();
