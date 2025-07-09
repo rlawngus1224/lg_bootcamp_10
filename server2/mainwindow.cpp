@@ -124,7 +124,7 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::loadWavList() {
-    QString path = "/root";
+    QString path = "/mnt/nfs";
     QDir dir(path);
     QStringList filters {"*.wav"};
     auto files = dir.entryInfoList(filters, QDir::Files);

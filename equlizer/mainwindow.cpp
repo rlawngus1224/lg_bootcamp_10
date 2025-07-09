@@ -504,23 +504,23 @@ void MainWindow::runP2PCommands()
     // 6) snapclient 백그라운드 실행
     QString snapCmd = "/root/snapclient";
     //Low
-    QStringList snapArgs = {
-        "tcp://192.168.4.1:1704",
-        "--sampleformat", "48000:16:*",
-        "--Latency", "300"
-    };
+//    QStringList snapArgs = {
+//        "tcp://192.168.4.1:1704",
+//        "--sampleformat", "48000:16:*",
+//        "--Latency", "300"
+//    };
 //    //Original
 //    QStringList snapArgs = {
 //        "tcp://192.168.4.1:1705",
 //        "--sampleformat", "48000:16:*",
 //        "--Latency", "300"
 //    };
-//    //High
-//    QStringList snapArgs = {
-//        "tcp://192.168.4.1:1706",
-//        "--sampleformat", "48000:16:*",
-//        "--Latency", "300"
-//    };
+    //High
+    QStringList snapArgs = {
+        "tcp://192.168.4.1:1706",
+        "--sampleformat", "48000:16:*",
+        "--Latency", "300"
+    };
     QProcess *snapProc = new QProcess(this);
     snapProc->setProgram(snapCmd);
     snapProc->setArguments(snapArgs);
