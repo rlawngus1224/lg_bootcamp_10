@@ -459,11 +459,11 @@ void MainWindow::updateVolumeInverse(int distance)
     int volume_pct = VOL_MIN_PCT
                    + int(inv * (VOL_MAX_PCT - VOL_MIN_PCT) + 0.5);
     // 6) ALSA 실제 볼륨으로 변환 & 적용
-    long alsa_vol = (m_volMax - m_volMin) * 70 / 100 + m_volMin;
+    long alsa_vol = (m_volMax - m_volMin) * volume_pct / 100 + m_volMin;
     snd_mixer_selem_set_playback_volume_all(m_mixerElem, alsa_vol);
 
     // 7) 상태 업데이트
-    m_currentVolume  = 70;
+    m_currentVolume  = volume_pct;
 }
 
 void MainWindow::onDistanceTimer()
@@ -477,7 +477,7 @@ void MainWindow::onDistanceTimer()
     // 필터 없이 바로 볼륨 업데이트
 //    updateVolume(distance);
 
-    updateVolumeInverse(distance);
+//    updateVolumeInverse(distance);
 }
 
 
@@ -539,23 +539,23 @@ void MainWindow::runP2PCommands()
     // 6) snapclient 백그라운드 실행
     QString snapCmd = "/root/snapclient";
     //Low
-   QStringList snapArgs = {
-       "tcp://192.168.4.1:1704",
-       "--sampleformat", "48000:16:*",
-       "--Latency", "300"
-   };
+//   QStringList snapArgs = {
+//       "tcp://192.168.4.1:1704",
+//       "--sampleformat", "48000:16:*",
+//       "--Latency", "300"
+//   };
     //High
-    // QStringList snapArgs = {
-    //     "tcp://192.168.4.1:1705",
-    //     "--sampleformat", "48000:16:*",
-    //     "--Latency", "300"
-    // };
+//     QStringList snapArgs = {
+//         "tcp://192.168.4.1:1705",
+//         "--sampleformat", "48000:16:*",
+//         "--Latency", "300"
+//     };
 //    Original
-//    QStringList snapArgs = {
-//        "tcp://192.168.4.1:1706",
-//        "--sampleformat", "48000:16:*",
-//        "--Latency", "300"
-//    };
+    QStringList snapArgs = {
+        "tcp://192.168.4.1:1706",
+        "--sampleformat", "48000:16:*",
+        "--Latency", "300"
+    };
     QProcess *snapProc = new QProcess(this);
     snapProc->setProgram(snapCmd);
     snapProc->setArguments(snapArgs);
