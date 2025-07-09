@@ -73,7 +73,7 @@ private:
     // 설정값
     static constexpr int DIST_MIN_MM = 100;    // 최소 거리
     static constexpr int DIST_MAX_MM = 2000;   // 최대 거리
-    static constexpr int VOL_MIN_PCT = 65;     // 최소 볼륨 %
-    static constexpr int VOL_MAX_PCT = 75;     // 최대 볼륨 %
+    static constexpr int VOL_MIN_PCT = 75;     // 최소 볼륨 %
+    static constexpr int VOL_MAX_PCT = 85;     // 최대 볼륨 %
 };
 #endif // MAINWINDOW_H
