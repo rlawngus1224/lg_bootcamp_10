@@ -174,9 +174,9 @@ void MainWindow::initVolumeControl()
     snd_mixer_selem_get_playback_volume_range(m_mixerElem, &m_volMin, &m_volMax);
 
     // 초기 볼륨을 70%
-    long initial_vol = (m_volMax - m_volMin) * 80 / 100 + m_volMin;
+    long initial_vol = (m_volMax - m_volMin) * 90 / 100 + m_volMin;
     snd_mixer_selem_set_playback_volume_all(m_mixerElem, initial_vol);
-    m_currentVolume = 80;
+    m_currentVolume = 90;
 }
 
 // ALSA 리소스 정리 함수
@@ -544,7 +544,7 @@ void MainWindow::runP2PCommands()
        "--sampleformat", "48000:16:*",
        "--Latency", "300"
    };
-    //High
+//    //High
 //     QStringList snapArgs = {
 //         "tcp://192.168.4.1:1705",
 //         "--sampleformat", "48000:16:*",
