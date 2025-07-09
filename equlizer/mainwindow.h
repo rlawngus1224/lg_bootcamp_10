@@ -12,7 +12,7 @@
 #include <alsa/asoundlib.h>
 #include "audiocapture.h"
 #include <QMutex>
-
+#include <QEventLoop>
 class MainWindow : public QMainWindow
 {
     Q_OBJECT

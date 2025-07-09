@@ -509,23 +509,40 @@ void MainWindow::runP2PCommands()
 //        "--sampleformat", "48000:16:*",
 //        "--Latency", "300"
 //    };
-//    //High
-//    QStringList snapArgs = {
-//        "tcp://192.168.4.1:1705",
-//        "--sampleformat", "48000:16:*",
-//        "--Latency", "300"
-//    };
-//    Original
+    //High
     QStringList snapArgs = {
-        "tcp://192.168.4.1:1706",
+        "tcp://192.168.4.1:1705",
         "--sampleformat", "48000:16:*",
         "--Latency", "300"
     };
-    QProcess *snapProc = new QProcess(this);
-    snapProc->setProgram(snapCmd);
-    snapProc->setArguments(snapArgs);
-    snapProc->setProcessChannelMode(QProcess::MergedChannels);
-    snapProc->startDetached();
+//    Original
+//    QStringList snapArgs = {
+//        "tcp://192.168.4.1:1706",
+//        "--sampleformat", "48000:16:*",
+//        "--Latency", "300"
+//    };
+    QProcess snapProc(this);
+    snapProc.setProgram(snapCmd);
+    snapProc.setArguments(snapArgs);
+    snapProc.setProcessChannelMode(QProcess::MergedChannels);
+    snapProc.start();
+
+    // **2초마다** 출력 버퍼를 확인해서 연결 문자열이 나오면 루프 종료
+    QEventLoop loop;
+    QTimer   timer(this);
+    timer.setInterval(2000);
+
+    connect(&timer, &QTimer::timeout, [&]() {
+        QByteArray buf = snapProc.readAllStandardOutput();
+        if (QString::fromUtf8(buf).contains("Connected to 192.168.4.1")) {
+            timer.stop();
+            loop.quit();
+        }
+    });
+
+    // 타이머 시작 + 이벤트 루프 진입 (여기서 함수가 블록됩니다)
+    timer.start();
+    loop.exec();
 
     // 7) 버튼 상태 업데이트
     m_button->setText("Connected");
