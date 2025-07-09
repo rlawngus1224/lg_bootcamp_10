@@ -269,10 +269,10 @@ void MainWindow::onSnapOutputLow() {
 }
 
 void MainWindow::onSnapOutputHigh() {
-    if (!procSnapLow) return;
+    if (!procSnapHigh) return;
 
     // 1) 프로세스 stdout 읽기
-    QByteArray data = procSnapLow->readAllStandardOutput();
+    QByteArray data = procSnapHigh->readAllStandardOutput();
     QString out = QString::fromUtf8(data);
     qDebug() << "[SnapHigh stdout]" << out;
     // 2) MAC 주소 파싱: "Hello from B8:27:EB:FF:7D:4A,"
@@ -282,17 +282,17 @@ void MainWindow::onSnapOutputHigh() {
         QString mac = match.captured(1);
         qDebug() << "[SnapHigh] Detected MAC:" << mac;
         // 지정된 MAC과 일치할 때만 상태 변경
-        if (mac.compare("b8:27:eb:ff:7d:4a", Qt::CaseInsensitive) == 0) {
+        if (mac.compare("b8:27:eb:9d:e5:c8", Qt::CaseInsensitive) == 0) {
             lblClient2->setText("Client2 Connected (High)");
         }
     }
 }
 
 void MainWindow::onSnapOutputOrigin() {
-    if (!procSnapLow) return;
+    if (!procSnapOrigin) return;
 
     // 1) 프로세스 stdout 읽기
-    QByteArray data = procSnapLow->readAllStandardOutput();
+    QByteArray data = procSnapOrigin->readAllStandardOutput();
     QString out = QString::fromUtf8(data);
     qDebug() << "[SnapOrigin stdout]" << out;
 
@@ -303,7 +303,7 @@ void MainWindow::onSnapOutputOrigin() {
         QString mac = match.captured(1);
         qDebug() << "[SnapLow] Detected MAC:" << mac;
         // 지정된 MAC과 일치할 때만 상태 변경
-        if (mac.compare("b8:27:eb:cc:fe:f3", Qt::CaseInsensitive) == 0) {
+        if (mac.compare("b8:27:eb:9d:e5:c8", Qt::CaseInsensitive) == 0) {
             lblClient3->setText("Client3 Connected (Origin)");
         }
     }
@@ -341,7 +341,7 @@ void MainWindow::onFileDoubleClicked(QListWidgetItem *item) {
     // ffmpeg 실행
     startFFmpeg(filePath);
 }
-
+//음역대 분리 및 재생
 void MainWindow::startFFmpeg(const QString &filePath) {
     stopFFmpeg(); // 이미 실행 중이면 종료
     procFFmpeg = new QProcess(this);

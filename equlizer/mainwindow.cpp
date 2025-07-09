@@ -173,10 +173,10 @@ void MainWindow::initVolumeControl()
     // 재생 볼륨의 물리적 범위 가져오기
     snd_mixer_selem_get_playback_volume_range(m_mixerElem, &m_volMin, &m_volMax);
 
-    // 초기 볼륨을 80%로 설정
-    long initial_vol = (m_volMax - m_volMin) * 80 / 100 + m_volMin;
+    // 초기 볼륨을 70%
+    long initial_vol = (m_volMax - m_volMin) * 70 / 100 + m_volMin;
     snd_mixer_selem_set_playback_volume_all(m_mixerElem, initial_vol);
-    m_currentVolume = 80;
+    m_currentVolume = 70;
 }
 
 // ALSA 리소스 정리 함수
@@ -414,24 +414,56 @@ int MainWindow::readUS100Distance()
 
 void MainWindow::updateVolume(int distance)
 {
-    // ALSA 핸들이 유효하지 않으면 아무것도 하지 않음
     if (!m_mixerElem) return;
 
-    // 거리가 범위를 벗어나면 조정
+    // 1) 거리 범위 클램프
     if (distance < DIST_MIN_MM) distance = DIST_MIN_MM;
     if (distance > DIST_MAX_MM) distance = DIST_MAX_MM;
 
-    // 거리를 볼륨 퍼센트로 변환 (선형)
-    long volume_pct = VOL_MIN_PCT + (long)(VOL_MAX_PCT - VOL_MIN_PCT) * (distance - DIST_MIN_MM) / (DIST_MAX_MM - DIST_MIN_MM);
+    // 2) 0~1 정규화
+    double x = double(distance - DIST_MIN_MM) / (DIST_MAX_MM - DIST_MIN_MM);
 
-    // 퍼센트를 실제 ALSA 볼륨 값으로 변환
+    // 3) 로그 커브 적용
+    const double k = 9.0;  // 모양 파라미터 (값 클수록 더 급격한 초반 상승)
+    double scaled = std::log(1 + k * x) / std::log(1 + k);
+
+    // 4) 로그 스케일 값을 60~80% 구간으로 매핑
+    int volume_pct = VOL_MIN_PCT
+                   + int(scaled * (VOL_MAX_PCT - VOL_MIN_PCT) + 0.5);
+
+    // 5) ALSA 볼륨으로 변환
     long alsa_vol = (m_volMax - m_volMin) * volume_pct / 100 + m_volMin;
-
-    // ALSA API를 통해 모든 채널(좌/우)의 볼륨을 설정
     snd_mixer_selem_set_playback_volume_all(m_mixerElem, alsa_vol);
 
-    m_currentVolume = volume_pct;
-    m_currentDistance = distance;
+    m_currentVolume  = volume_pct;
+}
+
+void MainWindow::updateVolumeInverse(int distance)
+{
+    if (!m_mixerElem) return;
+
+    // 1) 거리 클램프
+    if (distance < DIST_MIN_MM) distance = DIST_MIN_MM;
+    if (distance > DIST_MAX_MM) distance = DIST_MAX_MM;
+
+    // 2) 0~1 정규화
+    double x = double(distance - DIST_MIN_MM) / (DIST_MAX_MM - DIST_MIN_MM);
+    // 3) 로그 커브 적용
+    const double k = 9.0;  // 튜닝 파라미터 (크면 초반 더 빠르게 변함)
+    double scaled = std::log(1 + k * x) / std::log(1 + k);
+
+    // 4) 반전 (가까울수록 “scaled=0→1” 이 1→0이 되도록)
+    double inv = 1.0 - scaled;
+
+    // 5) 60~80% 범위로 매핑
+    int volume_pct = VOL_MIN_PCT
+                   + int(inv * (VOL_MAX_PCT - VOL_MIN_PCT) + 0.5);
+    // 6) ALSA 실제 볼륨으로 변환 & 적용
+    long alsa_vol = (m_volMax - m_volMin) * volume_pct / 100 + m_volMin;
+    snd_mixer_selem_set_playback_volume_all(m_mixerElem, alsa_vol);
+
+    // 7) 상태 업데이트
+    m_currentVolume  = volume_pct;
 }
 
 void MainWindow::onDistanceTimer()
@@ -440,9 +472,12 @@ void MainWindow::onDistanceTimer()
 
     int distance = readUS100Distance();
     if (distance <= 0) return;
+    m_currentDistance = distance;
 
     // 필터 없이 바로 볼륨 업데이트
-    updateVolume(distance);
+//    updateVolume(distance);
+
+    updateVolumeInverse(distance);
 }
 
 
@@ -502,7 +537,7 @@ void MainWindow::runP2PCommands()
     // 실패 체크는 로그만 남기고 계속 진행
 
     // 6) snapclient 백그라운드 실행
-    QString snapCmd = "/root/snapclient";
+    // QString snapCmd = "/root/snapclient";
     //Low
 //    QStringList snapArgs = {
 //        "tcp://192.168.4.1:1704",
@@ -510,50 +545,67 @@ void MainWindow::runP2PCommands()
 //        "--Latency", "300"
 //    };
     //High
-    QStringList snapArgs = {
-        "tcp://192.168.4.1:1705",
-        "--sampleformat", "48000:16:*",
-        "--Latency", "300"
-    };
+    // QStringList snapArgs = {
+    //     "tcp://192.168.4.1:1705",
+    //     "--sampleformat", "48000:16:*",
+    //     "--Latency", "300"
+    // };
 //    Original
 //    QStringList snapArgs = {
 //        "tcp://192.168.4.1:1706",
 //        "--sampleformat", "48000:16:*",
 //        "--Latency", "300"
 //    };
-    QProcess snapProc(this);
-    snapProc.setProgram(snapCmd);
-    snapProc.setArguments(snapArgs);
-    snapProc.setProcessChannelMode(QProcess::MergedChannels);
-    snapProc.start();
-
-    // **2초마다** 출력 버퍼를 확인해서 연결 문자열이 나오면 루프 종료
-    QEventLoop loop;
-    QTimer   timer(this);
-    timer.setInterval(2000);
-
-    connect(&timer, &QTimer::timeout, [&]() {
-        QByteArray buf = snapProc.readAllStandardOutput();
-        if (QString::fromUtf8(buf).contains("Connected to 192.168.4.1")) {
-            timer.stop();
-            loop.quit();
-        }
+    if (m_snapProc) {
+        m_snapProc->deleteLater();
+    }
+    m_snapProc = new QProcess(this);
+    m_snapProc->setProgram("/root/snapclient");
+    m_snapProc->setArguments({
+        "tcp://192.168.4.1:1704",
+        "--sampleformat", "48000:16:*",
+        "--Latency", "300"
     });
+    m_snapProc->setProcessChannelMode(QProcess::MergedChannels);
 
-    // 타이머 시작 + 이벤트 루프 진입 (여기서 함수가 블록됩니다)
-    timer.start();
-    loop.exec();
+    // stdout이 준비될 때마다 onSnapClientOutput()이 호출되도록
+    connect(m_snapProc, &QProcess::readyReadStandardOutput,
+            this,       &MainWindow::onSnapClientOutput);
 
-    // 7) 버튼 상태 업데이트
-    m_button->setText("Connected");
-    m_button->setStyleSheet(
-        "QPushButton {"
-        "  background-color: #4CAF50;"
-        "}"
-    );
-    // Disconnect 슬롯 대신 다시 이 함수를 호출하도록 연결
+    m_snapProc->start();
+    if (!m_snapProc->waitForStarted(3000)) {
+        qWarning() << "Failed to start snapclient";
+        return;
+    }
+    
+    qDebug() << "Snapclient started, waiting for connection log…";
+
+    // 버튼 클릭 시 재연결되도록 시그널 재설정 (원래 의도대로)
     disconnect(m_button, &QPushButton::clicked, nullptr, nullptr);
-    connect(m_button, &QPushButton::clicked, this, &MainWindow::runP2PCommands);
+    connect(m_button, &QPushButton::clicked,
+            this,       &MainWindow::runP2PCommands);
+}
 
-    qDebug() << "Snapclient start completed";
+void MainWindow::onSnapClientOutput()
+{
+    if (!m_snapProc) return;
+
+    QByteArray raw = m_snapProc->readAllStandardOutput();
+    QString out = QString::fromUtf8(raw).trimmed();
+    qDebug().noquote() << "[SnapClient]" << out;
+
+    // 로그에 Connected 메시지가 나오면 버튼 상태 변경
+    if (out.contains("Connected to 192.168.4.1")) {
+        m_button->setText("Connected");
+        m_button->setStyleSheet(R"(
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+            }
+        )");
+        // 더 이상 이 슬롯에서 반복할 필요 없으므로 연결 해제
+        disconnect(m_snapProc, &QProcess::readyReadStandardOutput,
+                   this,       &MainWindow::onSnapClientOutput);
+        qDebug() << "Button updated to Connected";
+    }
 }

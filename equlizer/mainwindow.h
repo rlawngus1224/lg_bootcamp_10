@@ -29,6 +29,7 @@ private slots:
     void onDistanceTimer();  // 거리 측정용 타이머 슬롯
     void runP2PCommands();
     void onAudioData(const QByteArray &pcm);
+    void onSnapClientOutput();
 
 private:
     void readHeader();
@@ -40,6 +41,7 @@ private:
     bool initializeUS100();
     int readUS100Distance();
     void updateVolume(int distance);
+    void updateVolumeInverse(int distance);
     int m_currentDistance;     // 현재 거리값 (mm)
     int m_currentVolume;       // 현재 볼륨값 (%)
     QTimer *m_timer;
@@ -52,6 +54,7 @@ private:
     QVector<std::complex<double>> m_fftBuffer;
     int       m_samplesPerFrame;
     QPushButton *m_button;
+    QProcess    *m_snapProc; 
 
     void initVolumeControl();          // ALSA mixer 초기화
     void cleanupVolumeControl();       // ALSA mixer 정리
@@ -70,8 +73,8 @@ private:
     QTimer *m_distanceTimer;           // 거리 측정용 타이머    
     // 설정값
     static constexpr int DIST_MIN_MM = 100;    // 최소 거리
-    static constexpr int DIST_MAX_MM = 1500;   // 최대 거리
-    static constexpr int VOL_MIN_PCT = 60;     // 최소 볼륨 %
-    static constexpr int VOL_MAX_PCT = 80;     // 최대 볼륨 %
+    static constexpr int DIST_MAX_MM = 2000;   // 최대 거리
+    static constexpr int VOL_MIN_PCT = 65;     // 최소 볼륨 %
+    static constexpr int VOL_MAX_PCT = 75;     // 최대 볼륨 %
 };
 #endif // MAINWINDOW_H
