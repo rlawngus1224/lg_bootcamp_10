@@ -56,9 +56,9 @@ MainWindow::MainWindow(QWidget *parent)
 {
     setMinimumSize(600, 300);
     m_levels.resize( m_fftSize/2 );
-    if (!openWav("/mnt/nfs/test_contents/test.wav")) {
-        qFatal("WAV open failed");
-    }
+//    if (!openWav("/mnt/nfs/test_contents/test.wav")) {
+//        qFatal("WAV open failed");
+//    }
     m_button = new QPushButton("Sync", this);
     connect(m_button, &QPushButton::clicked, this, &MainWindow::runP2PCommands);
     initVolumeControl();
@@ -188,13 +188,13 @@ void MainWindow::cleanupVolumeControl()
     }
 }
 
-bool MainWindow::openWav(const QString &path)
-{
-    m_file.setFileName(path);
-    if (!m_file.open(QIODevice::ReadOnly)) return false;
-    readHeader();
-    return true;
-}
+//bool MainWindow::openWav(const QString &path)
+//{
+//    m_file.setFileName(path);
+//    if (!m_file.open(QIODevice::ReadOnly)) return false;
+//    readHeader();
+//    return true;
+//}
 
 
 void MainWindow::resizeEvent(QResizeEvent *event)
@@ -509,13 +509,13 @@ void MainWindow::runP2PCommands()
 //        "--sampleformat", "48000:16:*",
 //        "--Latency", "300"
 //    };
-//    //Original
+//    //High
 //    QStringList snapArgs = {
 //        "tcp://192.168.4.1:1705",
 //        "--sampleformat", "48000:16:*",
 //        "--Latency", "300"
 //    };
-    //High
+//    Original
     QStringList snapArgs = {
         "tcp://192.168.4.1:1706",
         "--sampleformat", "48000:16:*",
